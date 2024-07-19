@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ground Truth Annotation with Prediction Boxes</title>
+    <style>
+        .box {
+            position: absolute;
+            border: 2px solid;
+        }
+        .ground-truth {
+            border-color: green;
+        }
+        .prediction-high {
+            border-color: blue;
+        }
+        .prediction-low {
+            border-color: red;
+        }
+        #image-container {
+            position: relative;
+            display: inline-block;
+        }
+        #image {
+            max-width: 100%;
+            max-height: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+<input type="number" id="imageNumber" placeholder="Enter image number">
+<button onclick="loadImage()">Load Image</button>
+
+<div id="image-container">
+    <img id="image" src="" alt="Image">
+</div>
+
+<script>
+    let groundTruthBoxes = {};
+    let predictionBoxes = {};
+    let startX, startY, endX, endY;
+    let isDrawing = false;
+
+    async function loadImage() {
+        const num = document.getElementById('imageNumber').value;
+        const imageUrl = `/img/im${num}.jpg`;
+
+        const image = document.getElementById('image');
+        image.src = imageUrl;
+        image.onload = async () => {
+            const response = await fetch(`/load/${num}`);
+            const result = await response.json();
+            const imageContainer = document.getElementById('image-container');
+            imageContainer.querySelectorAll('.box').forEach(box => box.remove());
+
+            if (result.success) {
+                groundTruthBoxes[num] = result.data.groundTruth || [];
+                predictionBoxes[num] = result.data.prediction || [];
+
+                groundTruthBoxes[num].forEach(box => {
+                    const div = createBox(box.x1, box.y1, box.x2, box.y2, 'ground-truth');
+                    imageContainer.appendChild(div);
+                });
+
+                predictionBoxes[num].forEach(box => {
+                    const iou = calculateIoU(box, groundTruthBoxes[num]);
+                    const className = iou >= 0.5 ? 'prediction-high' : 'prediction-low';
+                    const div = createBox(box.x1, box.y1, box.x2, box.y2, className);
+                    imageContainer.appendChild(div);
+                });
+            } else {
+                groundTruthBoxes[num] = [];
+                predictionBoxes[num] = [];
+            }
+        };
+    }
+
+    document.getElementById('image-container').addEventListener('mousedown', function(event) {
+        if (event.target.id === 'image') {
+            startX = event.offsetX;
+            startY = event.offsetY;
+            isDrawing = true;
+        }
+    });
+
+    document.getElementById('image-container').addEventListener('mousemove', function(event) {
+        if (isDrawing) {
+            const imageContainer = document.getElementById('image-container');
+            const existingBox = document.getElementById('drawing-box');
+            if (existingBox) {
+                existingBox.remove();
+            }
+
+            endX = event.offsetX;
+            endY = event.offsetY;
+
+            const div = createBox(startX, startY, endX, endY, 'ground-truth');
+            div.id = 'drawing-box';
+            imageContainer.appendChild(div);
+        }
+    });
+
+    document.getElementById('image-container').addEventListener('mouseup', function(event) {
+        if (isDrawing) {
+            isDrawing = false;
+            const imageContainer = document.getElementById('image-container');
+            const drawingBox = document.getElementById('drawing-box');
+            if (drawingBox) {
+                drawingBox.id = '';
+            }
+
+            const num = document.getElementById('imageNumber').value;
+            if (!groundTruthBoxes[num]) {
+                groundTruthBoxes[num] = [];
+            }
+            groundTruthBoxes[num].push({x1: startX, y1: startY, x2: endX, y2: endY});
+
+            // Save the annotations to the server
+            fetch(`/save/${num}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ data: { groundTruth: groundTruthBoxes[num], prediction: predictionBoxes[num] } })
+            });
+        }
+    });
+
+    function createBox(x1, y1, x2, y2, className) {
+        const div = document.createElement('div');
+        div.className = `box ${className}`;
+        div.style.left = `${Math.min(x1, x2)}px`;
+        div.style.top = `${Math.min(y1, y2)}px`;
+        div.style.width = `${Math.abs(x2 - x1)}px`;
+        div.style.height = `${Math.abs(y2 - y1)}px`;
+        return div;
+    }
+
+    function calculateIoU(box1, groundTruths) {
+        let maxIoU = 0;
+        groundTruths.forEach(gt => {
+            const x1 = Math.max(box1.x1, gt.x1);
+            const y1 = Math.max(box1.y1, gt.y1);
+            const x2 = Math.min(box1.x2, gt.x2);
+            const y2 = Math.min(box1.y2, gt.y2);
+
+            const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            const box1Area = (box1.x2 - box1.x1) * (box1.y2 - box1.y1);
+            const box2Area = (gt.x2 - gt.x1) * (gt.y2 - gt.y1);
+            const union = box1Area + box2Area - intersection;
+
+            const iou = intersection / union;
+            if (iou > maxIoU) {
+                maxIoU = iou;
+            }
+        });
+        return maxIoU;
+    }
+</script>
+</body>
+</html>
